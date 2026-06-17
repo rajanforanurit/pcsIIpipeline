@@ -1,68 +1,110 @@
-# AI Question Ingestion Platform
+# PCS-II Question Ingestion Platform v2.0
 
-Production-ready FastAPI backend for UPSC/PSC competitive exam question ingestion, OCR, AI generation, and admin review.
+Production backend for UPSC/UPPCS exam question ingestion via Google Drive ETL pipeline.
 
 ## Architecture
 
 ```
-app/
-├── api/v1/routes/          # FastAPI route handlers
-├── core/                   # Config, security, logging, exceptions
-├── db/                     # MongoDB connection and indexes
-├── models/                 # Pydantic v2 models
-├── repositories/           # Data access layer (Repository pattern)
-└── services/
-    ├── ai/                 # PCS-II model abstraction
-    ├── ingestion/          # English / Hindi / Book pipelines
-    ├── ocr/                # PaddleOCR scanned PDF processing
-    ├── parsers/            # Deterministic question parsers
-    └── validators/         # Rule-based question validators
+Google Drive (Unprocessed Folder)
+    ↓  Changes API watcher
+Download PDF  →  TEMP_DIR
+    ↓
+OCR (PaddleOCR)
+    ↓
+DeepSeek V3.2 (Azure AI Foundry)
+    ↓  Detects: language, document_type, year, exam, paper
+Generate JSON (canonical schema)
+    ↓
+Validate JSON
+    ↓
+Upload to Pending JSON Folder (Drive)
+    ↓
+Admin Review Panel (/api/v1/pending-review)
+    ↓ approve / reject
+Approve:
+  → Insert into MongoDB (englishquestions / hindiquestions)
+  → Move JSON: pending → processed_json
+  → Move PDF: unprocessed → processed_pdf
+  → Upload processing log
+Reject:
+  → Move JSON: pending → failed
+  → No MongoDB insert
 ```
 
-## API Endpoints
+## New Endpoints (v2.0)
 
-### Authentication
+### Pending Review Panel
 | Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/auth/login` | Admin login, returns JWT |
-| GET | `/api/v1/auth/me` | Get current admin info |
-| POST | `/api/v1/auth/logout` | Logout |
+|--------|------|-------------|
+| GET | /api/v1/pending-review | List pending reviews |
+| GET | /api/v1/pending-review/{id} | Get full review with questions |
+| PUT | /api/v1/pending-review/{id} | Edit questions |
+| POST | /api/v1/pending-review/{id}/approve | Approve → MongoDB |
+| POST | /api/v1/pending-review/{id}/reject | Reject |
+| GET | /api/v1/pending-review/{id}/preview | JSON preview |
 
-### Dashboard
+### Drive Pipeline Management
 | Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/dashboard/stats` | Aggregated counts |
+|--------|------|-------------|
+| GET | /api/v1/drive-pipeline/jobs | List Drive ingestion jobs |
+| GET | /api/v1/drive-pipeline/jobs/{id} | Get single job |
+| POST | /api/v1/drive-pipeline/trigger | Manually trigger pipeline |
+| GET | /api/v1/drive-pipeline/status | Pipeline config status |
 
-### Ingestion
+### Health / Readiness
 | Method | Path | Description |
-|---|---|---|
-| POST | `/api/v1/ingest/english` | Upload English exam PDF |
-| POST | `/api/v1/ingest/hindi` | Upload Hindi exam PDF |
-| POST | `/api/v1/ingest/book` | Upload book PDF for AI generation |
+|--------|------|-------------|
+| GET | /health | Liveness probe |
+| GET | /readiness | Readiness probe (checks MongoDB) |
 
-### Jobs
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/jobs` | List jobs (paginated, filtered) |
-| GET | `/api/v1/jobs/{job_id}` | Get job details with logs |
+## Environment Variables
 
-### PCS Questions (English/Hindi)
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/questions/pcs` | List questions (paginated, filtered) |
-| GET | `/api/v1/questions/pcs/{id}` | Get single question |
-| PATCH | `/api/v1/questions/pcs/{id}` | Edit question/options/answer |
-| DELETE | `/api/v1/questions/pcs/{id}` | Delete question |
-| POST | `/api/v1/questions/pcs/{id}/approve` | Approve single question |
-| POST | `/api/v1/questions/pcs/bulk/approve` | Bulk approve questions |
+See `.env.example` for all required variables.
 
-### Book Questions
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/v1/questions/book` | List questions (paginated, filtered) |
-| GET | `/api/v1/questions/book/{id}` | Get single question |
-| PATCH | `/api/v1/questions/book/{id}` | Edit question/options |
-| DELETE | `/api/v1/questions/book/{id}` | Delete question |
-| POST | `/api/v1/questions/book/{id}/approve` | Approve single question |
-| POST | `/api/v1/questions/book/bulk/approve` | Bulk approve |
-| GET | `/api/v1/questions/book/export/approved` | Export approved as JSON |
+Key new variables:
+- `GOOGLE_SERVICE_ACCOUNT_JSON` – full service account JSON (loaded from env)
+- `GOOGLE_DRIVE_UNPROCESSED_FOLDER_ID` – source folder watched for new PDFs
+- `GOOGLE_DRIVE_PENDING_JSON_FOLDER_ID` – where AI JSON goes before admin review
+- `GOOGLE_DRIVE_PROCESSED_JSON_FOLDER_ID` – approved JSONs
+- `GOOGLE_DRIVE_PROCESSED_PDF_FOLDER_ID` – approved PDFs
+- `GOOGLE_DRIVE_PROCESSED_LOG_FOLDER_ID` – processing logs
+- `GOOGLE_DRIVE_FAILED_FOLDER_ID` – failed PDFs / rejected JSONs
+- `CHECK_INTERVAL_SECONDS` – Drive polling interval (default 60)
+- `MAX_CONCURRENT_WORKERS` – parallel pipeline workers (default 2)
+- `PIPELINE_MODE` – `auto` (background watcher) or `manual` (API-triggered only)
+- `ENABLE_DUPLICATE_CHECK` – skip already-processed Drive file IDs
+
+## JSON Schema (canonical)
+
+```json
+{
+  "id": 1,
+  "year": 2023,
+  "exam": "UPSC Prelims",
+  "paper": "GS Paper 1",
+  "language": "English",
+  "question": "Which of the following...?",
+  "options": {
+    "A": "Option A",
+    "B": "Option B",
+    "C": "Option C",
+    "D": "Option D"
+  },
+  "correct_answer": "B"
+}
+```
+
+## Running locally
+
+```bash
+pip install -r requirements.txt
+cp .env.example .env  # fill in values
+uvicorn app.main:app --reload
+```
+
+## Docker
+
+```bash
+docker build -t pcsii-pipeline .
+docker run -p 8000:8000 --env-file .env pcsii-pipeline
+```
