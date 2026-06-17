@@ -1,0 +1,35 @@
+# Web framework
+fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+motor
+pymongo
+
+# Auth
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+
+# PDF & OCR
+PyMuPDF
+Pillow
+paddlepaddle
+pydantic
+pydantic-settings
+httpx
+python-dotenv
+structlog
+opencv-python-headless
+paddleocr
+numpy
+
+# Google Drive
+google-api-python-client
+google-auth
+google-auth-httplib2
+google-auth-oauthlib
+
+# Retry utilities
+tenacity
