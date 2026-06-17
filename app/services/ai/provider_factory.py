@@ -12,7 +12,7 @@ def get_ai_provider() -> BaseAIProvider:
         raise AIProviderNotConfiguredError()
     from app.services.ai.azure_provider import AzureAIProvider
     _provider_instance = AzureAIProvider()
-    logger.info("ai.provider_initialized", provider="azure")
+    logger.info('ai.provider_initialized', provider='azure')
     return _provider_instance
 def reset_provider() -> None:
     global _provider_instance
