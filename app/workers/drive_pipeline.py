@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models.common import JobStatus
+from app.models.common import JobStatus, JobType, PDFType
 from app.models.pipeline import PendingQuestion, PendingReviewDocument
 from app.repositories.job_repository import JobRepository
 from app.repositories.pending_review_repository import PendingReviewRepository
@@ -20,13 +20,14 @@ from app.services.azure_blob.uploader import upload_json
 from app.services.azure_blob.logger import upload_processing_log
 from app.services.azure_blob.client import FOLDER_UNPROCESSED, FOLDER_PROCESSED_PDF, FOLDER_FAILED, FOLDER_PROCESSED_JSON
 from app.services.ocr.paddle_ocr import extract_text_from_scanned_pdf
-from app.services.pdf_detector import detect_pdf_type
+from app.services.pdf_detector import detect_pdf_type, assess_text_quality
 from app.services.text_extractor import extract_text_from_pdf
 from app.models.job import IngestionJob
-from app.models.common import JobType
 
 logger = get_logger(__name__)
 _MAX_CHUNK_WORKERS = 3
+_MIN_TEXT_LENGTH = 200
+_MIN_QUALITY_SCORE = 0.40
 
 
 async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorDatabase) -> bool:
@@ -41,7 +42,6 @@ async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorData
     total_pages = 0
 
     try:
-        # Create ingestion job record
         job = IngestionJob(
             job_type=JobType.BLOB,
             original_filename=file_name,
@@ -52,27 +52,44 @@ async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorData
         logger.info('blob_pipeline.started', job_id=job_id, file=file_name)
 
         await job_repo.mark_started(job_id)
-        local_path = await download_pdf(file_name)
 
+        # Download from blob
+        local_path = await download_pdf(file_name)
+        logger.info('blob_pipeline.downloaded', job_id=job_id, local_path=local_path)
+
+        # OCR / text extraction
         await job_repo.update_status(job_id, JobStatus.OCR)
         t_ocr_start = time.monotonic()
+
         pdf_type, total_pages = detect_pdf_type(local_path)
         await job_repo.update_pdf_info(job_id, pdf_type.value, total_pages)
+        logger.info('blob_pipeline.pdf_detected', job_id=job_id, pdf_type=pdf_type.value, pages=total_pages)
 
-        if pdf_type.value == 'scanned':
+        if pdf_type == PDFType.SCANNED:
             text = await extract_text_from_scanned_pdf(local_path)
         else:
             loop = asyncio.get_event_loop()
             text = await loop.run_in_executor(None, extract_text_from_pdf, local_path)
+            # If text layer is poor quality, fall back to OCR
+            quality = assess_text_quality(text)
+            logger.info('blob_pipeline.text_quality', job_id=job_id, chars=len(text), quality=round(quality, 3))
+            if len(text) < _MIN_TEXT_LENGTH or quality < _MIN_QUALITY_SCORE:
+                logger.info('blob_pipeline.falling_back_to_ocr', job_id=job_id, reason='low quality or too short')
+                text = await extract_text_from_scanned_pdf(local_path)
 
         ocr_duration = time.monotonic() - t_ocr_start
         logger.info('blob_pipeline.ocr_done', job_id=job_id, chars=len(text), ocr_s=round(ocr_duration, 2))
 
+        if not text.strip():
+            raise ValueError('No text extracted from PDF after OCR — PDF may be corrupted or image-only with no readable content')
+
+        # AI extraction
         await job_repo.update_status(job_id, JobStatus.AI)
         t_ai_start = time.monotonic()
         provider = DriveAIProvider()
         try:
             chunks = chunk_text(text)
+            logger.info('blob_pipeline.chunked', job_id=job_id, chunks=len(chunks))
             semaphore = asyncio.Semaphore(_MAX_CHUNK_WORKERS)
             all_questions: List[Dict[str, Any]] = []
             meta: Dict[str, Any] = {}
@@ -97,18 +114,29 @@ async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorData
         ai_duration = time.monotonic() - t_ai_start
         logger.info('blob_pipeline.ai_done', job_id=job_id, raw_q=len(all_questions), ai_s=round(ai_duration, 2))
 
+        # Validation
         await job_repo.update_status(job_id, JobStatus.VALIDATION)
-
-        # Validate: keep questions that have at least one language
         valid = [q for q in all_questions if q.get('english') or q.get('hindi')]
         invalid_count = len(all_questions) - len(valid)
         warnings: List[str] = []
         if invalid_count:
             warnings.append(f'{invalid_count} questions skipped (missing both language sections)')
 
+        # Deduplicate by question id
+        seen_ids = set()
+        deduped = []
+        for q in valid:
+            qid = q.get('id')
+            if qid not in seen_ids:
+                seen_ids.add(qid)
+                deduped.append(q)
+        valid = deduped
+
         # Re-number sequentially
         for i, q in enumerate(valid, start=1):
             q['id'] = i
+
+        logger.info('blob_pipeline.validation_done', job_id=job_id, valid=len(valid), invalid=invalid_count)
 
         document_type = meta.get('document_type', 'Other')
         year = meta.get('year')
@@ -177,7 +205,9 @@ async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorData
         return True
 
     except Exception as exc:
+        tb = traceback.format_exc()
         logger.error('blob_pipeline.failed', file=file_name, error=str(exc))
+        logger.debug('blob_pipeline.traceback', tb=tb)
         try:
             await move_blob(FOLDER_UNPROCESSED, FOLDER_FAILED, file_name)
         except Exception:
@@ -213,5 +243,5 @@ async def run_blob_pipeline(blob_name: str, file_name: str, db: AsyncIOMotorData
                 pass
 
 
-# Keep backward-compatible name used in watcher worker
+# Keep backward-compatible name
 run_drive_pipeline = run_blob_pipeline

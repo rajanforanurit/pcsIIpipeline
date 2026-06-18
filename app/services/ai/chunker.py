@@ -1,14 +1,20 @@
 import re
 from typing import List
-_MIN_CHUNK = 500
-_MAX_CHUNK = 3000
-_OVERLAP = 100
-def chunk_text(text: str, max_chunk_size: int=_MAX_CHUNK, min_chunk_size: int=_MIN_CHUNK, overlap: int=_OVERLAP) -> List[str]:
+
+# Larger chunks so each AI call sees a full set of questions with context
+_MIN_CHUNK = 800
+_MAX_CHUNK = 6000
+_OVERLAP = 200
+
+
+def chunk_text(text: str, max_chunk_size: int = _MAX_CHUNK, min_chunk_size: int = _MIN_CHUNK, overlap: int = _OVERLAP) -> List[str]:
     if not text or not text.strip():
         return []
-    paragraphs = re.split('\\n{2,}', text.strip())
+
+    paragraphs = re.split(r'\n{2,}', text.strip())
     chunks: List[str] = []
     current_chunk = ''
+
     for para in paragraphs:
         para = para.strip()
         if not para:
@@ -27,15 +33,19 @@ def chunk_text(text: str, max_chunk_size: int=_MAX_CHUNK, min_chunk_size: int=_M
                 current_chunk = (overlap_text + '\n\n' + para).strip()
             else:
                 current_chunk = para
+
     if current_chunk and len(current_chunk) >= min_chunk_size:
         chunks.append(current_chunk)
     elif current_chunk and chunks:
         chunks[-1] = chunks[-1] + '\n\n' + current_chunk
     elif current_chunk:
         chunks.append(current_chunk)
+
     return [c for c in chunks if c.strip()]
+
+
 def _split_large_paragraph(text: str, max_size: int, overlap: int) -> List[str]:
-    sentences = re.split('(?<=[.!?])\\s+', text)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
     chunks: List[str] = []
     current = ''
     for sentence in sentences:

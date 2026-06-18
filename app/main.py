@@ -32,9 +32,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator:
 
 
 app = FastAPI(
-    title='PCS Question Ingestion Platform',
+    title='AI Question Ingestion Platform',
     description='Production backend for UPSC/PSC bilingual question ingestion via Azure Blob Storage ETL pipeline, OCR, AI extraction (DeepSeek V3.2), admin review, and MongoDB storage.',
-    version='2.2.0',
+    version='2.0.0',
     docs_url='/docs',
     redoc_url='/redoc',
     openapi_url='/openapi.json',
@@ -105,7 +105,7 @@ async def root():
         'features': [
             'Azure Blob Storage ETL Pipeline',
             'Admin Pending Review Panel',
-            'PCS2 V3.2 Model for Bilingual AI Extraction',
+            'DeepSeek V3.2 Bilingual AI Extraction',
             'OCR (PaddleOCR)',
             'MongoDB Storage (pcsquestions, bookquestions, pending_reviews)',
         ],
