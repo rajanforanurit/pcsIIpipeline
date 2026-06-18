@@ -7,15 +7,12 @@ logger = get_logger(__name__)
 async def move_blob(source_folder: str, dest_folder: str, file_name: str) -> bool:
     source_blob = f"{source_folder}/{file_name}"
     dest_blob = f"{dest_folder}/{file_name}"
-
-    client = get_blob_service_client()
     container = get_container_name()
 
     try:
-        async with client:
+        async with get_blob_service_client() as client:
             source_client = client.get_blob_client(container=container, blob=source_blob)
             dest_client = client.get_blob_client(container=container, blob=dest_blob)
-            # Copy then delete
             source_url = source_client.url
             await dest_client.start_copy_from_url(source_url)
             await source_client.delete_blob()
@@ -28,11 +25,10 @@ async def move_blob(source_folder: str, dest_folder: str, file_name: str) -> boo
 
 async def delete_blob(folder: str, file_name: str) -> bool:
     blob_name = f"{folder}/{file_name}"
-    client = get_blob_service_client()
     container = get_container_name()
 
     try:
-        async with client:
+        async with get_blob_service_client() as client:
             blob_client = client.get_blob_client(container=container, blob=blob_name)
             await blob_client.delete_blob()
         logger.info('blob_mover.deleted', blob=blob_name)
