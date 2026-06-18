@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.core.exceptions import AIProviderError, AIProviderNotConfiguredError
 from app.core.logging import get_logger
 from app.models.common import DocumentType
+from app.services.ai.endpoint import build_chat_url, build_headers, _is_azure_openai
 
 logger = get_logger(__name__)
 
@@ -70,35 +71,40 @@ class DriveAIProvider:
         self._endpoint = settings.PCS2.rstrip('/')
         self._api_key = settings.PCS2_API
         self._model = settings.AI_MODEL_DEPLOYMENT
+        self._url = build_chat_url(self._endpoint)
+        self._is_azure_openai = _is_azure_openai(self._endpoint)
         self._client = httpx.AsyncClient(
             timeout=240.0,
-            headers={
-                'Authorization': f'Bearer {self._api_key}',
-                'Content-Type': 'application/json',
-            },
+            headers=build_headers(self._api_key),
         )
+        logger.info('blob_ai.initialized', url=self._url, model=self._model)
+
+    def _build_payload(self, system_prompt: str, user_prompt: str, max_tokens: int) -> dict:
+        payload = {
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user', 'content': user_prompt},
+            ],
+            'max_tokens': max_tokens,
+            'temperature': 0.05,
+            'top_p': 0.95,
+        }
+        # For Azure AI Foundry, model goes in the body; for Azure OpenAI it's in the URL
+        if not self._is_azure_openai:
+            payload['model'] = self._model
+        return payload
 
     async def extract_questions(self, ocr_text: str, chunk_index: int = 0) -> Dict[str, Any]:
-        url = f'{self._endpoint}?api-version=2024-05-01-preview'
         user_prompt = (
             'Extract ALL numbered MCQ questions from the text below. '
             'Pair English and Hindi versions of the same question together. '
             'Return ONLY the JSON object — no markdown, no extra text.\n\n'
             f'TEXT:\n{ocr_text}'
         )
-        payload = {
-            'model': self._model,
-            'messages': [
-                {'role': 'system', 'content': _SYSTEM_PROMPT},
-                {'role': 'user', 'content': user_prompt},
-            ],
-            'max_tokens': 12000,
-            'temperature': 0.05,
-            'top_p': 0.95,
-        }
+        payload = self._build_payload(_SYSTEM_PROMPT, user_prompt, max_tokens=12000)
         try:
             t0 = time.monotonic()
-            response = await self._client.post(url, json=payload)
+            response = await self._client.post(self._url, json=payload)
             response.raise_for_status()
             elapsed = time.monotonic() - t0
             data = response.json()
@@ -112,7 +118,7 @@ class DriveAIProvider:
             )
             return self._parse_response(content, chunk_index)
         except httpx.HTTPStatusError as e:
-            logger.error('blob_ai.http_error', status=e.response.status_code, chunk_index=chunk_index)
+            logger.error('blob_ai.http_error', status=e.response.status_code, chunk_index=chunk_index, body=e.response.text[:300])
             raise AIProviderError(f'HTTP {e.response.status_code}: {e.response.text[:200]}', provider='azure')
         except httpx.RequestError as e:
             logger.error('blob_ai.request_error', error=str(e), chunk_index=chunk_index)
@@ -122,16 +128,12 @@ class DriveAIProvider:
             raise AIProviderError(f'Unexpected response structure: {str(e)}', provider='azure')
 
     def _parse_response(self, content: str, chunk_index: int) -> Dict[str, Any]:
-        # Strip markdown fences if present
         content = re.sub(r'^```(?:json)?\s*', '', content, flags=re.MULTILINE)
         content = re.sub(r'\s*```$', '', content, flags=re.MULTILINE)
         content = content.strip()
-
-        # Try direct parse first
         try:
             result = json.loads(content)
         except json.JSONDecodeError:
-            # Fall back: find outermost JSON object
             match = re.search(r'\{.*\}', content, re.DOTALL)
             if not match:
                 logger.warning('blob_ai.no_json_found', chunk_index=chunk_index, preview=content[:200])
@@ -144,24 +146,18 @@ class DriveAIProvider:
 
         questions = result.get('questions', [])
         validated: List[Dict[str, Any]] = []
-
         for idx, q in enumerate(questions, start=1):
             if not isinstance(q, dict):
                 continue
-
             english = self._validate_lang_section(q.get('english'))
             hindi = self._validate_lang_section(q.get('hindi'))
-
             if english is None and hindi is None:
-                logger.debug('blob_ai.question_skipped_no_langs', id=q.get('id', idx))
                 continue
-
             answer = q.get('answer')
             if answer is not None:
                 answer = str(answer).upper().strip()
                 if answer not in {'A', 'B', 'C', 'D'}:
                     answer = None
-
             validated.append({
                 'id': q.get('id', idx),
                 'year': q.get('year') or result.get('year'),
@@ -190,10 +186,7 @@ class DriveAIProvider:
         opts = section.get('options', {})
         if not isinstance(opts, dict):
             return None
-        # Must have all 4 options; normalize lowercase a/b/c/d to A/B/C/D
-        normalized: Dict[str, str] = {}
-        for k, v in opts.items():
-            normalized[k.upper()] = str(v).strip()
+        normalized: Dict[str, str] = {k.upper(): str(v).strip() for k, v in opts.items()}
         if not all(k in normalized for k in ('A', 'B', 'C', 'D')):
             return None
         return {
