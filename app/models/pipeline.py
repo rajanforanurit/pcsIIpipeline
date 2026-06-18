@@ -20,15 +20,22 @@ class PipelineResult(BaseModel):
     total_pages: int = 0
 
 
+class PendingQuestionLanguage(BaseModel):
+    question: str
+    options: Dict[str, str]
+
+
 class PendingQuestion(BaseModel):
     id: int
     year: Optional[int] = None
     exam: Optional[str] = None
     paper: Optional[str] = None
-    language: str = 'English'
-    question: str
-    options: Dict[str, str]
-    correct_answer: Optional[str] = None
+    english: Optional[PendingQuestionLanguage] = None
+    hindi: Optional[PendingQuestionLanguage] = None
+    answer: Optional[str] = None
+    marks: float = 2.0
+    negativeMarks: float = 0.66
+    status: str = 'pending'
 
 
 class PendingReviewDocument(BaseDocument, AuditMixin):

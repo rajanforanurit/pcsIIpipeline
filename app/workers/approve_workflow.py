@@ -63,6 +63,8 @@ async def run_approve_workflow(
             exam=q.get('exam') or '',
             english=english,
             hindi=hindi,
+            marks=q.get('marks', 2.0),
+            negativeMarks=q.get('negativeMarks', 0.66),
             answer=q.get('answer'),
             status=QuestionStatus.APPROVED,
             created_by=approved_by,
@@ -78,7 +80,6 @@ async def run_approve_workflow(
 
     logger.info('approve_workflow.inserted', count=len(inserted_ids))
 
-    # Move PDF from unprocessed to processed_pdf
     move_errors: List[str] = []
     if file_name:
         ok = await move_blob(FOLDER_UNPROCESSED, FOLDER_PROCESSED_PDF, file_name)

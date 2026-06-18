@@ -21,7 +21,6 @@ class LanguageContent(BaseModel):
     options: QuestionOptions
 
 
-# pcsquestions collection schema: bilingual (English + Hindi)
 class PCSQuestion(BaseDocument, AuditMixin):
     job_id: str
     question_no: int = Field(ge=1)
@@ -31,6 +30,8 @@ class PCSQuestion(BaseDocument, AuditMixin):
     set_name: Optional[str] = Field(default=None, max_length=10)
     english: Optional[LanguageContent] = None
     hindi: Optional[LanguageContent] = None
+    marks: float = Field(default=2.0)
+    negativeMarks: float = Field(default=0.66)
     answer: Optional[str] = Field(default=None)
     status: QuestionStatus = Field(default=QuestionStatus.PENDING)
     reviewer_notes: Optional[str] = Field(default=None, max_length=500)
