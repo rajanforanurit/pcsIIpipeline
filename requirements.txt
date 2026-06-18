@@ -25,11 +25,8 @@ opencv-python-headless
 paddleocr
 numpy
 
-# Google Drive
-google-api-python-client
-google-auth
-google-auth-httplib2
-google-auth-oauthlib
+# Azure Blob Storage
+azure-storage-blob
 
 # Retry utilities
 tenacity

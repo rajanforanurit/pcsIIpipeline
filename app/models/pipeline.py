@@ -2,68 +2,40 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from app.models.common import AuditMixin, BaseDocument, DocumentType, JobStatus, Language
-class DriveFileRecord(BaseDocument, AuditMixin):
-    drive_file_id: str
-    file_name: str
-    md5_checksum: Optional[str] = None
-    mime_type: str = 'application/pdf'
-    size_bytes: int = 0
-    processed: bool = False
-    processing_status: str = 'new'
-    drive_job_id: Optional[str] = None
-    error_message: Optional[str] = None
-class DriveWatcherState(BaseModel):
-    page_token: str
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class PipelineResult(BaseModel):
     success: bool
     pdf_name: str
-    drive_file_id: str
+    blob_name: str
     language: Optional[str] = None
     document_type: Optional[str] = None
     question_count: int = 0
-    pending_json_file_id: Optional[str] = None
+    pending_json_blob: Optional[str] = None
     errors: List[str] = Field(default_factory=list)
     warnings: List[str] = Field(default_factory=list)
     processing_time_seconds: float = 0.0
     ocr_duration_seconds: float = 0.0
     ai_duration_seconds: float = 0.0
     total_pages: int = 0
-class DriveIngestionJob(BaseDocument, AuditMixin):
-    drive_file_id: str
-    file_name: str
-    status: JobStatus = JobStatus.PENDING
-    document_type: Optional[str] = None
-    language: Optional[Language] = None
+
+
+class PendingQuestion(BaseModel):
+    id: int
     year: Optional[int] = None
     exam: Optional[str] = None
     paper: Optional[str] = None
-    total_pages: int = 0
-    question_count: int = 0
-    pending_json_drive_id: Optional[str] = None
-    processed_json_drive_id: Optional[str] = None
-    log_drive_id: Optional[str] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    ocr_duration_seconds: float = 0.0
-    ai_duration_seconds: float = 0.0
-    processing_time_seconds: float = 0.0
-    errors: List[str] = Field(default_factory=list)
-    warnings: List[str] = Field(default_factory=list)
-class PendingQuestion(BaseModel):
-    id: int
-    year: int
-    exam: str
-    paper: str
-    language: str
+    language: str = 'English'
     question: str
     options: Dict[str, str]
-    correct_answer: str
+    correct_answer: Optional[str] = None
+
+
 class PendingReviewDocument(BaseDocument, AuditMixin):
-    drive_job_id: str
-    drive_file_id: str
-    pending_json_drive_id: str
+    job_id: str
+    blob_name: str
     file_name: str
+    pending_json_blob: Optional[str] = None
     document_type: Optional[str] = None
     language: Optional[str] = None
     year: Optional[int] = None
@@ -72,13 +44,19 @@ class PendingReviewDocument(BaseDocument, AuditMixin):
     question_count: int = 0
     questions: List[PendingQuestion] = Field(default_factory=list)
     status: str = 'pending'
+
+
 class ApproveReviewRequest(BaseModel):
     questions: List[PendingQuestion]
+
+
 class RejectReviewRequest(BaseModel):
     reason: Optional[str] = None
+
+
 class ProcessingLog(BaseModel):
     file_name: str
-    drive_file_id: str
+    blob_name: str
     started_at: datetime
     finished_at: datetime
     processing_time_seconds: float
